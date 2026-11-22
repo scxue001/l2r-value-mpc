@@ -51,6 +51,26 @@ def test_batched_shapes():
     assert (starts[:, 0] < env.cfg.wall_x).all() and (starts[:, 2] == 0).all()
 
 
+def test_goal_sampling_region_and_exclusion():
+    env = KeyDoor2D()
+    box = {"x": [0.55, 0.75], "y": [0.2, 0.5]}
+    g = env.sample_goals(500, torch.Generator().manual_seed(0), exclude=box)
+    inside = (g[:, 0] >= 0.55) & (g[:, 0] <= 0.75) & (g[:, 1] >= 0.2) & (g[:, 1] <= 0.5)
+    assert len(g) == 500 and not inside.any()
+    h = env.sample_goals(50, torch.Generator().manual_seed(1), region=box)
+    assert (h[:, 0] >= 0.55).all() and (h[:, 0] <= 0.75).all() and (h[:, 1] >= 0.2).all() and (h[:, 1] <= 0.5).all()
+
+
+def test_make_psi_batched_weights():
+    env = KeyDoor2D()
+    r = env.default_reward()
+    goals = torch.tensor([[0.5, 0.0], [0.8, 0.3]])
+    psi = env.make_psi(r, goals, torch.tensor([0.5, 2.0]), 0.01)
+    assert psi.shape == (2, r.psi_dim)
+    assert torch.allclose(env.goal_from_psi(r, psi), goals)
+    assert torch.allclose(r.unpack(psi)["goal"][0], torch.tensor([0.5, 2.0]))
+
+
 def test_exact_value_sanity():
     env = KeyDoor2D()
     r = env.default_reward()

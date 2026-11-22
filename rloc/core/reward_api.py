@@ -142,6 +142,29 @@ class Reward:
                 i += pdim
         return psi
 
+    def pack_batch(self, n: int, spec: Mapping[str, Mapping[str, object]], dtype=torch.float32) -> Tensor:
+        """Vectorised ``pack`` for n rows.
+
+        Each value may be a scalar / [d] (shared by all rows) or [n] / [n, d]
+        (one per row).  Terms missing from ``spec`` are disabled.
+        """
+        unknown = set(spec) - set(self.terms)
+        if unknown:
+            raise KeyError(f"unknown reward terms: {sorted(unknown)}")
+        psi = torch.zeros(n, self.psi_dim, dtype=dtype)
+        for name, term in self.terms.items():
+            if name not in spec:
+                continue
+            lo, _ = self._slices[name]
+            w = torch.as_tensor(spec[name].get("weight", 1.0), dtype=dtype)
+            psi[:, lo] = w.expand(n) if w.ndim == 0 else w.reshape(n)
+            i = lo + 1
+            for pname, pdim in term.param_spec:
+                val = torch.as_tensor(spec[name][pname], dtype=dtype)
+                psi[:, i : i + pdim] = val.reshape(-1, pdim).expand(n, pdim)
+                i += pdim
+        return psi
+
     def unpack(self, psi: Tensor) -> dict[str, tuple[Tensor, dict[str, Tensor]]]:
         """Split psi [..., P] into ``{term: (weight [...], {param: [..., d]})}``."""
         out = {}

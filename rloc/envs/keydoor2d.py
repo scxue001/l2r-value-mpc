@@ -99,12 +99,16 @@ class KeyDoor2D(BatchedEnv):
         return Reward({"goal": PositionTarget("point", 2, norm), "effort": ControlEffort()})
 
     @staticmethod
-    def make_psi(reward: Reward, goal, goal_weight: float = 1.0, effort_weight: float = 0.01) -> Tensor:
+    def make_psi(reward: Reward, goal, goal_weight=1.0, effort_weight=0.01) -> Tensor:
+        """psi [P] for one goal [2], or psi [n, P] for goals [n, 2].
+
+        Weights may be scalars or (for a batch of goals) tensors [n].
+        """
         goal = torch.as_tensor(goal, dtype=torch.float32)
+        spec = {"goal": {"weight": goal_weight, "target": goal}, "effort": {"weight": effort_weight}}
         if goal.ndim == 1:
-            return reward.pack({"goal": {"weight": goal_weight, "target": goal},
-                                "effort": {"weight": effort_weight}})
-        return torch.stack([KeyDoor2D.make_psi(reward, g, goal_weight, effort_weight) for g in goal])
+            return reward.pack(spec)
+        return reward.pack_batch(len(goal), spec)
 
     @staticmethod
     def goal_from_psi(reward: Reward, psi: Tensor) -> Tensor:
@@ -140,11 +144,25 @@ class KeyDoor2D(BatchedEnv):
         p = torch.cat(out)[:n]
         return torch.cat([p, torch.zeros(n, 1)], dim=-1)
 
-    def sample_goals(self, n: int, generator: Optional[torch.Generator] = None) -> Tensor:
+    def sample_goals(self, n: int, generator: Optional[torch.Generator] = None,
+                     region: Optional[dict] = None, exclude: Optional[dict] = None) -> Tensor:
+        """Uniform goals in ``region`` (default: the config's goal region).
+
+        ``region`` / ``exclude`` are boxes ``{"x": [lo, hi], "y": [lo, hi]}``;
+        goals inside ``exclude`` are rejected (used to hold out a test region).
+        """
         c = self.cfg
-        gx = self._uniform(n, *c.goal_x, generator)
-        gy = self._uniform(n, *c.goal_y, generator)
-        return torch.stack([gx, gy], -1)
+        rx, ry = (region["x"], region["y"]) if region else (c.goal_x, c.goal_y)
+        out, have = [], 0
+        while have < n:
+            g = torch.stack([self._uniform(n, *rx, generator), self._uniform(n, *ry, generator)], -1)
+            if exclude:
+                inside = ((g[:, 0] >= exclude["x"][0]) & (g[:, 0] <= exclude["x"][1])
+                          & (g[:, 1] >= exclude["y"][0]) & (g[:, 1] <= exclude["y"][1]))
+                g = g[~inside]
+            out.append(g)
+            have += len(g)
+        return torch.cat(out)[:n]
 
     def success(self, x: Tensor, goal: Tensor) -> Tensor:
         return (x[..., :2] - goal).norm(dim=-1) < self.cfg.goal_tol

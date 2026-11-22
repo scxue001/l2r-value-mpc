@@ -16,6 +16,19 @@ def test_pack_unpack_roundtrip():
     assert parts["effort"][0].item() == pytest.approx(0.1)
 
 
+def test_pack_batch_matches_pack():
+    r = Reward({"goal": PositionTarget("point", 2), "near": Distance("point", "switch"), "effort": ControlEffort()})
+    goals = torch.tensor([[0.3, -0.4], [0.7, 0.1], [0.5, 0.5]])
+    weights = torch.tensor([0.5, 1.0, 2.0])
+    batch = r.pack_batch(3, {"goal": {"weight": weights, "target": goals}, "effort": {"weight": 0.01}})
+    for i in range(3):
+        single = r.pack({"goal": {"weight": weights[i].item(), "target": goals[i]}, "effort": {"weight": 0.01}})
+        assert torch.allclose(batch[i], single)
+    # shared target for all rows
+    shared = r.pack_batch(2, {"goal": {"weight": 1.0, "target": [0.1, 0.2]}})
+    assert torch.allclose(shared[1, 1:3], torch.tensor([0.1, 0.2]))
+
+
 def test_unknown_term_rejected():
     r = Reward({"goal": PositionTarget("point", 2)})
     with pytest.raises(KeyError):
