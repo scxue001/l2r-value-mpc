@@ -41,8 +41,8 @@ from rloc.core.mppi import MPPIConfig
 from rloc.core.value_net import ValueNet
 from rloc.envs.keydoor2d import KeyDoor2D
 from rloc.envs.keydoor2d_dp import GridSpec, OracleTerminal, solve_oracles
-from rloc.eval.common import (ROOT, build_controller, load_config, make_keydoor, make_psi, maybe_mkdir,
-                              run_episodes, seeded, time_per_step)
+from rloc.eval.common import (ROOT, build_controller, load_config, make_keydoor, make_psi, make_psi_sampler,
+                              maybe_mkdir, run_episodes, seeded, make_test_sets, time_per_step)
 from rloc.eval.plots import (draw_keydoor, plot_trajectories, plot_value_comparison,
                              plot_value_heatmaps)
 
@@ -68,31 +68,6 @@ def fvi_config(cfg: dict, v: dict, iterations: int | None) -> FVIConfig:
                      rollout_steps=v["rollout_steps"], rollout_horizon=v["rollout_horizon"], seed=v["seed"])
 
 
-def make_psi_sampler(cfg, env, reward, mode, region=None, exclude=None):
-    """Callable (n, gen) -> psi [n, P]."""
-    if mode == "fixed":
-        psi_main = make_psi(cfg, reward, cfg["reward"]["main_goal"])
-        return lambda n, g: psi_main.expand(n, -1).clone()
-    rg = cfg["value"]["random_goals"]
-
-    def sample(n, g):
-        goals = env.sample_goals(n, g, region=region, exclude=exclude)
-        u = lambda lo, hi: lo + (hi - lo) * torch.rand(n, generator=g)  # noqa: E731
-        return KeyDoor2D.make_psi(reward, goals, u(*rg["goal_weight_range"]), u(*rg["effort_weight_range"]))
-
-    return sample
-
-
-def test_sets(cfg, env, reward, mode, seed) -> dict[str, torch.Tensor]:
-    if mode == "fixed":
-        return {"main_goal": make_psi(cfg, reward, cfg["reward"]["main_goal"])[None]}
-    rg = cfg["value"]["random_goals"]
-    n = rg["test_goals"]
-    unseen = make_psi_sampler(cfg, env, reward, mode, exclude=rg["holdout_box"])(n, seeded(seed + 200))
-    held_out = make_psi_sampler(cfg, env, reward, mode, region=rg["holdout_box"])(n, seeded(seed + 300))
-    return {"unseen_goals": unseen, "held_out_region": held_out}
-
-
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--config", default=str(ROOT / "configs/keydoor.yaml"))
@@ -112,7 +87,7 @@ def main():
     grid = GridSpec(cfg["dp"]["grid_h"], cfg["dp"]["actions_per_axis"])
 
     # test goals and their exact values
-    sets = test_sets(cfg, env, reward, mode, v["seed"])
+    sets = make_test_sets(cfg, env, reward, mode, v["seed"])
     exact = {name: solve_oracles(env, reward, psis, grid) for name, psis in sets.items()}
     x_eval = env.sample_states(v["eval_states"], seeded(v["seed"] + 100))
     k_eval = x_eval[:, 2] > 0.5

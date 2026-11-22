@@ -71,6 +71,35 @@ def test_make_psi_batched_weights():
     assert torch.allclose(r.unpack(psi)["goal"][0], torch.tensor([0.5, 2.0]))
 
 
+def test_switch_shaping_static_and_staged():
+    env = KeyDoor2D()
+    sx, sy = env.cfg.switch_pos
+    x = torch.tensor([[sx + 0.3, sy, 0.0], [sx + 0.3, sy, 1.0], [sx, sy, 0.0]])
+    static = env.switch_shaping(x, weight=2.0, staged=False)
+    staged = env.switch_shaping(x, weight=2.0, staged=True)
+    expected = 2.0 * 0.09 * env.dt
+    assert torch.allclose(static[:2], torch.tensor([expected, expected]))
+    assert torch.isclose(staged[0], torch.tensor(expected)) and staged[1] == 0.0  # off once pressed
+    assert static[2] == 0.0 and staged[2] == 0.0  # zero on the switch
+
+
+def test_extra_cost_reaches_planner_only():
+    from rloc.eval.common import build_controller, load_config, ROOT
+
+    cfg = load_config(ROOT / "configs/keydoor.yaml")
+    env = KeyDoor2D()
+    r = env.default_reward()
+    calls = []
+
+    def extra(x, u, p):
+        calls.append(x.shape)
+        return torch.zeros(x.shape[:-1])
+
+    ctrl = build_controller(env, r, cfg, {"horizon": 3}, extra_cost=extra)
+    ctrl.act(torch.tensor([[-0.5, 0.0, 0.0]]), env.make_psi(r, [0.8, 0.0])[None])
+    assert calls, "extra cost was not used by the planner"
+
+
 def test_exact_value_sanity():
     env = KeyDoor2D()
     r = env.default_reward()

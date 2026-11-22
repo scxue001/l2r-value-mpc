@@ -81,3 +81,14 @@ value:                   # fitted value iteration (targets from a short sampling
     states_per_iter: 8192
     rollout_buffer: 80000
     rollout_starts: 512
+
+compare:                 # controller comparison and horizon sweep (scripts/compare_controllers.py)
+  value_ckpt: checkpoints/value_keydoor_random.pt   # goal-conditioned value
+  test_set: unseen_goals
+  horizons: [1, 2, 3, 5, 10, 15, 20, 30, 40, 60]
+  knot_spacing: 5        # horizons > 10 use one knot every 5 steps
+  shaping_weights: [0.1, 0.3, 1.0, 3.0, 10.0, 30.0]
+  tune_horizon: 10       # shaping weights are tuned here, on separate validation goals
+  tune_goals: 10
+  tune_episodes: 30
+  paths_horizon: 5
