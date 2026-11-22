@@ -1,0 +1,69 @@
+# Key-and-door toy problem (Step 1 of the proposal).
+env:
+  half_size: 1.0
+  wall_x: 0.0
+  door_half_width: 0.15
+  switch_pos: [-0.6, 0.75]
+  switch_radius: 0.1
+  u_max: 1.0
+  dt: 0.1
+  goal_tol: 0.05
+
+reward:
+  norm: quadratic        # quadratic | smooth_l2
+  goal_weight: 1.0
+  effort_weight: 0.01
+  main_goal: [0.8, 0.0]  # goal used for single-goal figures and DP checks
+
+dp:
+  grid_h: 0.02
+  actions_per_axis: 9
+  horizons: [5, 10, 15, 20, 25, 30, 40, 60]   # ideal finite-horizon study
+
+mppi:                    # shared by all controllers (same samples per step)
+  num_samples: 256
+  num_iters: 1
+  noise_sigma: 1.0
+  temperature: 0.02      # only used by update: mppi
+  update: best           # best (MJPC predictive sampling) | mppi (weighted average)
+
+eval:
+  seed: 0
+  num_episodes: 50
+  max_steps: 150
+  timing_steps: 30
+  # controller name -> horizon, knots (null = one per step), terminal value
+  # (none | oracle = exact DP value).  Optional per-controller "update".
+  controllers:
+    H5:          {horizon: 5,  num_knots: null, terminal: none}
+    H10:         {horizon: 10, num_knots: null, terminal: none}
+    H40:         {horizon: 40, num_knots: 8,    terminal: none}
+    H60:         {horizon: 60, num_knots: 12,   terminal: none}
+    H3_oracleV:  {horizon: 3,  num_knots: null, terminal: oracle}
+    H5_oracleV:  {horizon: 5,  num_knots: null, terminal: oracle}
+    H10_oracleV: {horizon: 10, num_knots: null, terminal: oracle}
+    H5_oracleV_mppi: {horizon: 5, num_knots: null, terminal: oracle, update: mppi}
+
+value:                   # fitted value iteration (targets from a short sampling MPC)
+  goal_mode: fixed       # fixed: psi = main_goal only
+  hidden: [64, 64, 64]
+  out_dim: 32
+  iterations: 40
+  states_per_iter: 4096
+  rollout_frac: 0.5      # share of states visited by the closed-loop MPC with V_k
+  rollout_buffer: 40000  # replay buffer of those states (prevents forgetting)
+  rollout_starts: 256
+  rollout_steps: 40
+  rollout_horizon: 5
+  target_horizon: 5      # T in eq. (2)
+  target_samples: 256
+  target_iters: 3
+  train_steps: 500
+  batch_size: 512
+  lr: 1.0e-3
+  weight_decay: 1.0e-4
+  anchor_weight: 1.0
+  anchor_states: 256
+  seed: 0
+  eval_states: 4000
+  eval_horizons: [3, 5, 10]

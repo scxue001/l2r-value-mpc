@@ -1,0 +1,11 @@
+.venv/
+__pycache__/
+*.pyc
+*.egg-info/
+# results/: keep only the figures (shown in the README)
+results/**
+!results/**/
+!results/**/*.png
+checkpoints/
+.DS_Store
+*.pdf

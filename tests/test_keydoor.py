@@ -1,0 +1,66 @@
+import torch
+
+from rloc.envs.keydoor2d import KeyDoor2D
+from rloc.envs.keydoor2d_dp import KeyDoorDP
+
+
+def step(env, x, u):
+    return env.step(torch.tensor([x]), torch.tensor([u]))[0]
+
+
+def test_closed_door_blocks():
+    env = KeyDoor2D()
+    x = step(env, [-0.05, 0.0, 0.0], [1.0, 0.0])
+    assert x[0] < env.cfg.wall_x  # stayed on the left
+    # moving right and up at the wall keeps the y motion (slides)
+    x = step(env, [-0.05, 0.0, 0.0], [1.0, 1.0])
+    assert x[0] < env.cfg.wall_x and torch.isclose(x[1], torch.tensor(0.1))
+
+
+def test_open_door_passes_only_through_gap():
+    env = KeyDoor2D()
+    x = step(env, [-0.05, 0.0, 1.0], [1.0, 0.0])
+    assert x[0] > env.cfg.wall_x
+    x = step(env, [-0.05, 0.5, 1.0], [1.0, 0.0])  # outside the gap: wall
+    assert x[0] < env.cfg.wall_x
+    x = step(env, [0.05, 0.0, 1.0], [-1.0, 0.0])  # also from the right
+    assert x[0] < env.cfg.wall_x
+
+
+def test_switch_sets_key_and_stays():
+    env = KeyDoor2D()
+    sx, sy = env.cfg.switch_pos
+    x = step(env, [sx - 0.1, sy, 0.0], [1.0, 0.0])
+    assert x[2] == 1.0
+    x = step(env, [0.9, -0.9, 1.0], [0.0, 0.0])  # far away, key kept
+    assert x[2] == 1.0
+
+
+def test_room_bounds_and_control_clip():
+    env = KeyDoor2D()
+    x = step(env, [0.95, 0.95, 0.0], [5.0, 5.0])
+    assert torch.allclose(x[:2], torch.tensor([1.0, 1.0]))
+
+
+def test_batched_shapes():
+    env = KeyDoor2D()
+    x = env.sample_states(12).reshape(3, 4, 3)
+    u = torch.zeros(3, 4, 2)
+    assert env.step(x, u).shape == (3, 4, 3)
+    starts = env.sample_start_states(50, torch.Generator().manual_seed(0))
+    assert (starts[:, 0] < env.cfg.wall_x).all() and (starts[:, 2] == 0).all()
+
+
+def test_exact_value_sanity():
+    env = KeyDoor2D()
+    r = env.default_reward()
+    psi = env.make_psi(r, [0.8, 0.0])
+    dp = KeyDoorDP(env, r, psi)
+    V = dp.solve()
+    assert (V.V >= 0).all()
+    pts = torch.tensor([[0.8, 0.0, 0.0], [-0.5, -0.5, 0.0], [-0.5, -0.5, 1.0]])
+    v = V(pts)
+    assert v[0] < 1e-3  # at the goal
+    assert v[1] > v[2]  # a closed door can only make things worse
+    # k = 1 never worse than k = 0 anywhere (up to interpolation noise)
+    assert (V.V[1] <= V.V[0] + 1e-4).all()

@@ -1,0 +1,26 @@
+[project]
+name = "rloc"
+version = "0.1.0"
+description = "Language to Rewards with a learned value function: short-horizon MPPI for multi-stage tasks"
+requires-python = ">=3.11,<3.12"
+dependencies = [
+    "numpy>=1.26",
+    "torch>=2.3",
+    "mujoco>=3.2",
+    "matplotlib>=3.8",
+    "pyyaml>=6.0",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8"]
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["rloc*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
