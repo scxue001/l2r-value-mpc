@@ -17,8 +17,13 @@ This repository contains the toy problem (key and door) and the shared code that
 * **Key-door toy environment**, batched in PyTorch, with an **exact grid value** used as ground truth and as an "oracle" terminal cost.
 * **Fitted value iteration** (eq. 2 of the proposal). Targets come from a short sampling MPC with the previous value as terminal cost. Training follows Jordana et al.: V = ½‖r_θ‖², tanh layers, and an anchor term at the goal. Two additions make it work here: on-policy states and a replay buffer (see below).
 * **Goal-conditioned value.** One network V_θ(x; ψ) is trained on random goals and goal weights, then tested on unseen goals and on a region of goals it never saw during training.
-* **Evaluation:** closed-loop success, steps, cost and time per step, plus value error against the exact solution.
-* **Tests:** 22 unit tests covering the reward API, MPC, environment, exact value, value iteration and headless imports. They run on every pull request (see [Continuous integration](#continuous-integration)).
+* **Controller comparison and horizon sweep.** The proposal's controllers are compared at horizons 1–60 with the same samples per step:
+  * reward only;
+  * reward + hand-written shaping, in two forms;
+  * reward + learned value;
+  * reward + exact value.
+* **Evaluation:** closed-loop success, stages completed, steps, cost and time per step, plus value error against the exact solution.
+* **Tests:** 24 unit tests covering the reward API, MPC, environment, shaping, exact value, value iteration and headless imports. They run on every pull request (see [Continuous integration](#continuous-integration)).
 
 ## Toy problem
 
@@ -156,7 +161,68 @@ Learned against exact value for four of the test goals:
 |---|---|
 | ![paths unseen](results/keydoor_value_goals/paths_unseen_goals.png) | ![paths held out](results/keydoor_value_goals/paths_held_out_region.png) |
 
-### 4. What it took to make value iteration work
+### 4. Controller comparison and horizon sweep
+
+This is the comparison from the proposal on the toy problem. Every controller uses 256 samples and 1 iteration per control step.
+
+| controller | planner cost |
+|---|---|
+| reward only | task reward alone (the L2R baseline) |
+| static shaping | + w · ‖p − switch‖². This could be written as an L2R `Distance` term. |
+| staged shaping | + w · (1 − k) · ‖p − switch‖², switched off once the switch is pressed. It needs the task stage, which a fixed L2R reward cannot express; this is what an engineer would hand-write. |
+| learned V | + goal-conditioned learned terminal value (section 3) |
+| exact V | + exact grid value (upper bound) |
+
+The long-horizon reference is "reward only" at large H.
+
+**Setup:**
+* Horizons above 10 use one spline knot every 5 steps.
+* Shaping weights were tuned at H = 10 over {0.1, 0.3, 1, 3, 10, 30} on 10 validation goals, separate from the test goals.
+* Tests use the 10 "unseen goals" from section 3 with 50 episodes per controller and horizon.
+* Shaping only enters the planner. Reported costs are the task cost alone.
+
+**Success rate** (time per control step in brackets):
+
+| H | reward only | static shaping (w = 0.1) | staged shaping (w = 10) | **learned V** | exact V |
+|---|---|---|---|---|---|
+| 1 | 0.00 | 0.00 | 0.60 | **0.72** (0.4 ms) | 1.00 |
+| 2 | 0.00 | 0.00 | 0.70 | **0.80** (0.6 ms) | 1.00 |
+| 3 | 0.00 | 0.00 | 0.70 | **0.80** (0.7 ms) | 1.00 |
+| 5 | 0.00 | 0.00 | 0.70 | **0.92** (0.9 ms) | 1.00 |
+| 10 | 0.00 | 0.00 | 0.70 | **0.74** (1.4 ms) | 0.76 |
+| 15 | 0.00 | 0.00 | 0.80 | 0.16 | 0.14 |
+| 20 | 0.00 | 0.00 | **1.00** (2.6 ms) | 0.18 | 0.14 |
+| 30 | 0.02 | 0.02 | 0.98 | 0.38 | 0.28 |
+| 40 | 0.02 | 0.02 | 0.94 | 0.44 | 0.40 |
+| 60 | 0.20 (6.3 ms) | 0.12 | 0.90 | 0.46 | 0.44 |
+
+The shortest horizon reaching at least 90% success:
+
+| controller | shortest H |
+|---|---|
+| reward only | none |
+| static shaping | none |
+| staged shaping | 20 |
+| **learned V** | **5** |
+| exact V | 1 |
+
+![horizon sweep](results/keydoor_compare/horizon_sweep.png)
+
+![paths at H = 5](results/keydoor_compare/paths.png)
+
+What the comparison shows:
+
+* **The learned value lets the shortest horizons work.** At H ≤ 10 it beats every other controller that doesn't have the exact value. H = 5 with the learned value (92%, 0.9 ms per step) is about as reliable as staged shaping at H = 20–60 (90–100%), at roughly a third of the compute or less.
+* **Static shaping, the kind of term the L2R API can express, never helps.** With a small weight nothing changes. With w ≥ 10 the point reaches the switch in 90–100% of tuning episodes but then stays there, because the term keeps pulling it back, so it never reaches the goal.
+* **Staged shaping is a strong baseline when someone writes the stage logic by hand.** It wins at long horizons (100% at H = 20). It is also very sensitive to its weight: 0% for w ≤ 1, 77% at w = 3, 93% at w = 10. The learned value needs neither stage logic nor a weight to tune.
+* **Value-based controllers degrade at long horizons, even with the exact value.** Two causes, both on the sampling side:
+  * Longer plans are harder to optimise with the same 256 samples. With per-step controls (separate 30-episode check), the exact value gives 100% at H ≤ 5, 77% at H = 10, 43% at H = 15 and 33% at H = 30.
+  * The coarse spline knots used above H = 10 make it worse: with 2–5 knots at H = 10, the exact value falls to 7–23%.
+
+  The value function therefore pays off most when paired with a very short horizon, which is also the cheapest setting.
+* **Time per step grows linearly with H** for every controller. The value adds about 0.1–0.2 ms per step. The single 8 ms spike at H = 30 in the plot is timing noise from one 30-step measurement.
+
+### 5. What it took to make value iteration work
 
 The plain algorithm, with states sampled uniformly, fails. After 30 rounds it reaches 4% success, and the closed-door error stays at 0.40.
 
@@ -180,7 +246,7 @@ Two ingredients do the work:
 1. **On-policy states.** Jordana et al. also add states from MPC runs. Half of each round's states come from closed-loop runs of the current controller, which pile up exactly where V_k is still wrong: in front of the door.
 2. **A replay buffer** of those states, with targets recomputed each round. Without it, training oscillates: once the controller succeeds, the rollouts stop visiting the door, V forgets that region, and the controller fails again.
 
-### 5. Other findings
+### 6. Other findings
 
 * **With a good value, shorter horizons work better for sampling MPC.** Using the exact value, H = 3–5 gives 100% while H = 10 gives 72–86%. Longer sampling problems are harder to solve with the same number of samples. Value-iteration targets therefore use T = 5.
 * **The best-sample update was as good as or better than the MPPI weighted average in every setting tried.** The average cancels out multimodal plans ("wait at the door" versus "detour"). Both are available via `MPPIConfig.update`.
@@ -199,10 +265,12 @@ uv pip install --python .venv/bin/python -e ".[dev]"
 .venv/bin/python scripts/run_baselines.py      # sampling-MPC baselines          (~40 s)
 .venv/bin/python scripts/train_value.py        # value for one goal + evaluation (~3 min)
 .venv/bin/python scripts/train_value.py --goal-mode random   # goal-conditioned value (~17 min)
+.venv/bin/python scripts/compare_controllers.py              # controller comparison + horizon sweep (~3 min)
 ```
 
-* Settings live in `configs/keydoor.yaml`; the goal-conditioned settings are under `value.random_goals`.
-* Outputs go to `results/keydoor_value/` and `results/keydoor_value_goals/`.
+* Settings live in `configs/keydoor.yaml`. The goal-conditioned settings are under `value.random_goals`, and the comparison settings under `compare`.
+* `compare_controllers.py` needs the goal-conditioned checkpoint from the previous command.
+* Outputs go to `results/keydoor_value/`, `results/keydoor_value_goals/` and `results/keydoor_compare/`.
 * Trained values go to `checkpoints/value_keydoor_{fixed,random}.pt`.
 * `train_value.py --eval-only` re-evaluates a saved checkpoint.
 
@@ -242,7 +310,7 @@ rloc/
     common.py       config loading, controller builder, batched episodes, timing
     plots.py        environment, trajectory and value heat-map plots
 configs/keydoor.yaml
-scripts/            exact_dp_keydoor.py, run_baselines.py, train_value.py
+scripts/            exact_dp_keydoor.py, run_baselines.py, train_value.py, compare_controllers.py
 tests/              unit tests
 .github/workflows/  CI (lint, tests, script smoke check)
 results/            script outputs (only the .png figures are tracked by git)
@@ -253,5 +321,4 @@ An arm environment only has to implement `BatchedEnv` (wrapping `mujoco.rollout`
 ## Not done yet
 
 * Closing the remaining gap on low-weight goals, for example with a loss weighted by the value scale.
-* A hand-written shaping baseline and a full horizon sweep.
 * The Franka arm tasks, the LLM reward translator, and the comparison on LLM-written rewards.

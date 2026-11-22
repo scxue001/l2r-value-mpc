@@ -164,5 +164,22 @@ class KeyDoor2D(BatchedEnv):
             have += len(g)
         return torch.cat(out)[:n]
 
+    # ------------------------------------------------------------------ #
+    # hand-written shaping baselines (planner-only extra costs)
+    # ------------------------------------------------------------------ #
+    def switch_shaping(self, x: Tensor, weight: float, staged: bool) -> Tensor:
+        """weight * |p - switch|^2 * dt, the 'go to the switch' hint.
+
+        staged=False: always on.  This is expressible in the L2R reward API
+            (a Distance(point, switch) term), but it keeps pulling towards the
+            switch after it has been pressed.
+        staged=True: only while k = 0.  This needs the task stage, which a
+            fixed L2R reward cannot express; it is what an engineer would write.
+        """
+        d2 = ((x[..., :2] - self.switch) ** 2).sum(-1)
+        if staged:
+            d2 = d2 * (1.0 - x[..., 2])
+        return weight * d2 * self.dt
+
     def success(self, x: Tensor, goal: Tensor) -> Tensor:
         return (x[..., :2] - goal).norm(dim=-1) < self.cfg.goal_tol
