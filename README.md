@@ -14,8 +14,9 @@ This repository contains the toy problem (key and door) and the shared code that
 * **Batched sampling MPC.** It solves many independent problems at once, with an optional terminal cost. It supports spline knots and two update rules: the MPPI weighted average, and best-sample (MJPC Predictive Sampling, the planner L2R uses). The same function is the real-time controller and the value-iteration target solver.
 * **Key-door toy environment**, batched in PyTorch, with an **exact grid value** used as ground truth and as an "oracle" terminal cost.
 * **Fitted value iteration** (eq. 2 of the proposal). Targets come from a short sampling MPC with the previous value as terminal cost. Training follows Jordana et al.: V = ½‖r_θ‖², tanh layers, and an anchor term at the goal. Two additions make it work here: on-policy states and a replay buffer (see below).
+* **Goal-conditioned value.** One network V_θ(x; ψ) is trained on random goals and goal weights, then tested on unseen goals and on a region of goals it never saw during training.
 * **Evaluation:** closed-loop success, steps, cost and time per step, plus value error against the exact solution.
-* **Tests:** 18 unit tests covering the reward API, MPC, environment, exact value and value iteration.
+* **Tests:** 21 unit tests covering the reward API, MPC, environment, exact value and value iteration.
 
 ## Toy problem
 
@@ -59,7 +60,7 @@ Even with 2048 samples × 3 iterations per step (24× the compute), H = 60 only 
 
 ![baseline paths](results/keydoor_baselines/paths.png)
 
-### 2. Learned value: matches the exact value in closed loop
+### 2. Learned value for one goal: matches the exact value in closed loop
 
 Training settings:
 * 40 rounds of value iteration with 4096 states per round.
@@ -97,11 +98,63 @@ The learned value is smoother than the grid value, which makes the 10-step sampl
 |---|---|
 | ![learned value](results/keydoor_value/value_learned.png) | ![value error](results/keydoor_value/value_error.png) |
 
-![closed-loop paths](results/keydoor_value/paths.png)
+![closed-loop paths](results/keydoor_value/paths_main_goal.png)
 
 ![learning curve](results/keydoor_value/learning_curve.png)
 
-### 3. What it took to make value iteration work
+### 3. One value for every goal (conditioned on ψ)
+
+ψ = (goal weight, goal position, effort weight) is sampled anew for every training state:
+* goal position uniform in x ∈ [0.4, 0.9], y ∈ [-0.8, 0.8];
+* goal weight uniform in [0.5, 2.0];
+* effort weight fixed at 0.01.
+
+A **held-out box** of goals, x ∈ [0.55, 0.75] × y ∈ [0.2, 0.5], is never used in training.
+
+Training uses the same algorithm with:
+* 100 rounds of 8192 states;
+* a 3 × 128 tanh MLP;
+* an 80k replay buffer.
+
+It takes about 14 minutes on CPU.
+
+There are two test sets of 10 goals each, with random goal weights; the exact value is solved separately for each goal:
+* **unseen goals:** new goals from the training distribution;
+* **held-out region:** goals inside the box.
+
+Each test set has 50 episodes from random starts.
+
+**Value error** on 4000 states, averaged over the 10 goals:
+
+| test set | mean exact value | all states | door closed | door open |
+|---|---|---|---|---|
+| unseen goals | 0.98 | 0.097 | 0.143 | 0.049 |
+| held-out region | 0.81 | 0.098 | 0.135 | 0.060 |
+
+**Closed loop:**
+
+| test set | horizon | none | **learned** | exact | learned: ms / step |
+|---|---|---|---|---|---|
+| unseen goals | 3 | 0.00 | **0.80** | 1.00 | 0.8 |
+| unseen goals | 5 | 0.00 | **0.92** | 1.00 | 1.0 |
+| unseen goals | 10 | 0.00 | **0.74** | 0.76 | 1.5 |
+| held-out region | 3 | 0.00 | **1.00** | 1.00 | 0.6 |
+| held-out region | 5 | 0.00 | **1.00** | 1.00 | 0.9 |
+| held-out region | 10 | 0.00 | **0.96** | 0.94 | 1.6 |
+
+* **The network generalises to goals it never saw.** On the held-out region it matches the exact value, and the value error there is no higher than on in-distribution goals.
+* **Hard cases.** The remaining failures on unseen goals are mostly goals with a low goal weight (0.5–0.8), whose values are about half as large, so the same absolute error matters more. Goals close to the wall also fail more often.
+* **Capacity choice.** A 3 × 64 network trained for 60 rounds reached a lower average value error (0.082) but worse closed-loop success: 70% / 70% / 58% on unseen goals and 86% / 86% / 82% on the held-out region. As in the single-goal case, the average value error is a weak predictor of closed-loop success.
+
+Learned against exact value for four of the test goals:
+
+![value comparison](results/keydoor_value_goals/value_comparison.png)
+
+| unseen goals | held-out region |
+|---|---|
+| ![paths unseen](results/keydoor_value_goals/paths_unseen_goals.png) | ![paths held out](results/keydoor_value_goals/paths_held_out_region.png) |
+
+### 4. What it took to make value iteration work
 
 The plain algorithm, with states sampled uniformly, fails. After 30 rounds it reaches 4% success, and the closed-door error stays at 0.40.
 
@@ -125,7 +178,7 @@ Two ingredients do the work:
 1. **On-policy states.** Jordana et al. also add states from MPC runs. Half of each round's states come from closed-loop runs of the current controller, which pile up exactly where V_k is still wrong: in front of the door.
 2. **A replay buffer** of those states, with targets recomputed each round. Without it, training oscillates: once the controller succeeds, the rollouts stop visiting the door, V forgets that region, and the controller fails again.
 
-### 4. Other findings
+### 5. Other findings
 
 * **With a good value, shorter horizons work better for sampling MPC.** Using the exact value, H = 3–5 gives 100% while H = 10 gives 72–86%. Longer sampling problems are harder to solve with the same number of samples. Value-iteration targets therefore use T = 5.
 * **The best-sample update was as good as or better than the MPPI weighted average in every setting tried.** The average cancels out multimodal plans ("wait at the door" versus "detour"). Both are available via `MPPIConfig.update`.
@@ -142,11 +195,13 @@ uv pip install --python .venv/bin/python -e ".[dev]"
 ```bash
 .venv/bin/python scripts/exact_dp_keydoor.py   # exact value + horizon study      (~5 s)
 .venv/bin/python scripts/run_baselines.py      # sampling-MPC baselines          (~40 s)
-.venv/bin/python scripts/train_value.py        # value iteration + evaluation   (~3 min)
+.venv/bin/python scripts/train_value.py        # value for one goal + evaluation (~3 min)
+.venv/bin/python scripts/train_value.py --goal-mode random   # goal-conditioned value (~17 min)
 ```
 
-* Settings live in `configs/keydoor.yaml`.
-* Outputs go to `results/`, and the trained value to `checkpoints/value_keydoor_fixed.pt`.
+* Settings live in `configs/keydoor.yaml`; the goal-conditioned settings are under `value.random_goals`.
+* Outputs go to `results/keydoor_value/` and `results/keydoor_value_goals/`.
+* Trained values go to `checkpoints/value_keydoor_{fixed,random}.pt`.
 * `train_value.py --eval-only` re-evaluates a saved checkpoint.
 
 > **macOS note.** `~/Desktop` is synced by iCloud, which marks files in `.venv` as hidden. Python 3.11 then skips the editable-install `.pth` file and `import rloc` fails outside the repo root. The scripts and pytest add the repo root to `sys.path` themselves. For other entry points, run from the repo root or set `PYTHONPATH=.`.
@@ -177,6 +232,6 @@ An arm environment only has to implement `BatchedEnv` (wrapping `mujoco.rollout`
 
 ## Not done yet
 
-* Conditioning the value on ψ: random goals and weights, tested on held-out goals.
+* Closing the remaining gap on low-weight goals, for example with a loss weighted by the value scale.
 * A hand-written shaping baseline and a full horizon sweep.
 * The Franka arm tasks, the LLM reward translator, and the comparison on LLM-written rewards.

@@ -35,8 +35,15 @@ def draw_keydoor(ax, env: KeyDoor2D, goal: Optional[Sequence[float]] = None, doo
     ax.set_yticks([])
 
 
-def plot_trajectories(ax, traj: torch.Tensor, success: Optional[torch.Tensor] = None):
-    """traj [B, T+1, 3]; colour: before switch (grey) / after switch (blue)."""
+def plot_trajectories(ax, traj: torch.Tensor, success: Optional[torch.Tensor] = None,
+                      goals: Optional[torch.Tensor] = None):
+    """traj [B, T+1, 3]; colour: before switch (grey) / after switch (blue).
+
+    ``goals`` [B, 2] draws each episode's goal (when episodes have different goals).
+    """
+    if goals is not None:
+        g = goals.detach().cpu().numpy()
+        ax.plot(g[:, 0], g[:, 1], "*", ms=9, color="tab:blue", mec="k", mew=0.5, zorder=4, ls="none")
     traj = traj.detach().cpu().numpy()
     for b in range(traj.shape[0]):
         p, k = traj[b, :, :2], traj[b, :, 2]
@@ -72,4 +79,32 @@ def plot_value_heatmaps(fig_path: str, env: KeyDoor2D, value_fn, goal, title: st
     if title:
         fig.suptitle(title)
     fig.savefig(fig_path, dpi=130, bbox_inches="tight")
+    plt.close(fig)
+
+
+def plot_value_comparison(fig_path: str, env: KeyDoor2D, entries, n: int = 120):
+    """One row per entry ``(title, goal, exact_fn, learned_fn)``.
+
+    Columns: exact k=0, learned k=0, exact k=1, learned k=1 (shared colour scale per row).
+    """
+    L = env.cfg.half_size
+    xs = torch.linspace(-L + 1e-3, L - 1e-3, n)
+    X, Y = torch.meshgrid(xs, xs, indexing="xy")
+    p = torch.stack([X.reshape(-1), Y.reshape(-1)], -1)
+    fig, axes = plt.subplots(len(entries), 4, figsize=(15, 3.9 * len(entries)), squeeze=False)
+    for r, (title, goal, exact_fn, learned_fn) in enumerate(entries):
+        panels = []
+        for k in (0, 1):
+            x = torch.cat([p, torch.full((len(p), 1), float(k))], -1)
+            with torch.no_grad():
+                panels += [(f"exact, k={k}", exact_fn(x)), (f"learned, k={k}", learned_fn(x))]
+        vmax = max(v.max().item() for _, v in panels)
+        for c, (name, v) in enumerate(panels):
+            ax = axes[r, c]
+            im = ax.imshow(v.reshape(n, n).cpu().numpy(), origin="lower", extent=[-L, L, -L, L],
+                           cmap="viridis", vmin=0, vmax=vmax)
+            draw_keydoor(ax, env, goal, door_open=c >= 2)
+            ax.set_title(f"{title}\n{name}" if c == 0 else name, fontsize=9)
+        fig.colorbar(im, ax=axes[r].tolist(), shrink=0.8, label="cost-to-go")
+    fig.savefig(fig_path, dpi=110, bbox_inches="tight")
     plt.close(fig)

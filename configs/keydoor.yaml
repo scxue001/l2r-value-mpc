@@ -67,3 +67,17 @@ value:                   # fitted value iteration (targets from a short sampling
   seed: 0
   eval_states: 4000
   eval_horizons: [3, 5, 10]
+
+  # goal_mode: random -> psi = (goal, weights) sampled per state; one region of
+  # goals is never seen in training and used as a held-out test set.
+  # Keys that also exist above override them in this mode.
+  random_goals:
+    goal_weight_range: [0.5, 2.0]
+    effort_weight_range: [0.01, 0.01]
+    holdout_box: {x: [0.55, 0.75], y: [0.2, 0.5]}
+    test_goals: 10          # goals per test set (exact value solved for each)
+    iterations: 100
+    hidden: [128, 128, 128]
+    states_per_iter: 8192
+    rollout_buffer: 80000
+    rollout_starts: 512
