@@ -1,5 +1,7 @@
 # Language to Rewards with a Learned Value Function
 
+[![CI](https://github.com/scxue001/l2r-value-mpc/actions/workflows/ci.yml/badge.svg)](https://github.com/scxue001/l2r-value-mpc/actions/workflows/ci.yml)
+
 ROB-GY 6323 project: short-horizon MPC for multi-stage manipulation.
 
 * An LLM writes the parameters ψ of an L2R-style reward.
@@ -16,7 +18,7 @@ This repository contains the toy problem (key and door) and the shared code that
 * **Fitted value iteration** (eq. 2 of the proposal). Targets come from a short sampling MPC with the previous value as terminal cost. Training follows Jordana et al.: V = ½‖r_θ‖², tanh layers, and an anchor term at the goal. Two additions make it work here: on-policy states and a replay buffer (see below).
 * **Goal-conditioned value.** One network V_θ(x; ψ) is trained on random goals and goal weights, then tested on unseen goals and on a region of goals it never saw during training.
 * **Evaluation:** closed-loop success, steps, cost and time per step, plus value error against the exact solution.
-* **Tests:** 21 unit tests covering the reward API, MPC, environment, exact value and value iteration.
+* **Tests:** 22 unit tests covering the reward API, MPC, environment, exact value, value iteration and headless imports. They run on every pull request (see [Continuous integration](#continuous-integration)).
 
 ## Toy problem
 
@@ -206,6 +208,23 @@ uv pip install --python .venv/bin/python -e ".[dev]"
 
 > **macOS note.** `~/Desktop` is synced by iCloud, which marks files in `.venv` as hidden. Python 3.11 then skips the editable-install `.pth` file and `import rloc` fails outside the repo root. The scripts and pytest add the repo root to `sys.path` themselves. For other entry points, run from the repo root or set `PYTHONPATH=.`.
 
+## Continuous integration
+
+Every pull request into `main` runs [`.github/workflows/ci.yml`](.github/workflows/ci.yml) on a headless Ubuntu runner (about 2 minutes):
+
+* `ruff check .`, limited to errors that crash at runtime (syntax errors, undefined names). Style is not checked.
+* `pytest -q` with CPU-only torch.
+* `python scripts/<each>.py --help`, so broken imports or arguments in the scripts are caught.
+
+To run the same checks locally:
+
+```bash
+.venv/bin/ruff check .
+.venv/bin/python -m pytest -q
+```
+
+The runner has no display. MuJoCo renders offscreen through EGL (`MUJOCO_GL=egl`) and matplotlib uses the Agg backend. Plain `import mujoco` is fine anywhere. The interactive viewer must stay opt-in: import `mujoco.viewer` only inside the code behind a `--viewer` flag that is off by default, and never from a module under `rloc/`. `tests/test_headless.py` fails if importing `rloc` loads the viewer.
+
 ## Layout
 
 ```
@@ -225,6 +244,7 @@ rloc/
 configs/keydoor.yaml
 scripts/            exact_dp_keydoor.py, run_baselines.py, train_value.py
 tests/              unit tests
+.github/workflows/  CI (lint, tests, script smoke check)
 results/            script outputs (only the .png figures are tracked by git)
 ```
 

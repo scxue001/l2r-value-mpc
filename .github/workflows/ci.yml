@@ -1,0 +1,64 @@
+name: CI
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+# A new push to the same PR cancels the run that is still going.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  lint:
+    name: Lint (crash-level errors)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install ruff
+      # Rules are set in pyproject.toml ([tool.ruff.lint]): syntax errors,
+      # undefined names, broken comparisons. No style rules.
+      - run: ruff check .
+
+  test:
+    name: Tests and script smoke check
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      # GitHub runners have no display: MuJoCo renders offscreen through EGL,
+      # matplotlib uses the non-GUI Agg backend. The interactive viewer is never opened.
+      MUJOCO_GL: egl
+      MPLBACKEND: Agg
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: pyproject.toml
+      - name: Install EGL for headless MuJoCo rendering
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libegl1
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          # CPU-only torch (~200 MB) instead of the default CUDA build (> 2 GB).
+          pip install torch --index-url https://download.pytorch.org/whl/cpu
+          pip install -e ".[dev]"
+      - name: Unit tests
+        run: pytest -q
+      - name: Script smoke check
+        run: |
+          for s in scripts/*.py; do
+            echo "::group::$s --help"
+            python "$s" --help
+            echo "::endgroup::"
+          done
